@@ -1,3 +1,4 @@
+import { _Math } from '../math/Math.js';
 import { Matrix4 } from '../math/Matrix4.js';
 
 /**
@@ -8,6 +9,8 @@ import { Matrix4 } from '../math/Matrix4.js';
  */
 
 function Skeleton( bones, boneInverses ) {
+
+	this.uuid = _Math.generateUUID();
 
 	// copy the bone array
 
@@ -169,6 +172,33 @@ Object.assign( Skeleton.prototype, {
 		}
 
 		return undefined;
+
+	},
+
+	toJSON: function ( meta ) {
+
+		var data = {};
+
+		var bones = [];
+		var boneInverses = [];
+
+		for ( var i = 0, il = this.bones.length; i < il; i ++ ) {
+
+			bones.push( this.bones[ i ].uuid );
+
+		}
+
+		for ( var i = 0, il = this.boneInverses.length; i < il; i ++ ) {
+
+			boneInverses.push( this.boneInverses[ i ].toArray() );
+
+		}
+
+		data.uuid = this.uuid;
+		data.bones = bones;
+		data.boneInverses = boneInverses;
+
+		return data;
 
 	}
 

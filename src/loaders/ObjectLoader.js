@@ -20,6 +20,7 @@ import {
 	LinearMipMapLinearFilter
 } from '../constants.js';
 import { Color } from '../math/Color.js';
+import { Matrix4 } from '../math/Matrix4.js';
 import { Object3D } from '../core/Object3D.js';
 import { Group } from '../objects/Group.js';
 import { Sprite } from '../objects/Sprite.js';
@@ -31,6 +32,8 @@ import { LOD } from '../objects/LOD.js';
 import { Mesh } from '../objects/Mesh.js';
 import { SkinnedMesh } from '../objects/SkinnedMesh.js';
 import { Shape } from '../extras/core/Shape.js';
+import { Bone } from '../objects/Bone.js';
+import { Skeleton } from '../objects/Skeleton.js';
 import { Fog } from '../scenes/Fog.js';
 import { FogExp2 } from '../scenes/FogExp2.js';
 import { HemisphereLight } from '../lights/HemisphereLight.js';
@@ -142,6 +145,10 @@ Object.assign( ObjectLoader.prototype, {
 		var materials = this.parseMaterials( json.materials, textures );
 
 		var object = this.parseObject( json.object, geometries, materials );
+
+		var skeletons = this.parseSkeletons( json.skeletons, object );
+
+		this.bindSkeletons( object, skeletons );
 
 		if ( json.animations ) {
 
@@ -656,6 +663,47 @@ Object.assign( ObjectLoader.prototype, {
 
 	},
 
+	parseSkeletons: function ( json, object ) {
+
+		var skeletons = {};
+
+		if ( json === undefined ) return skeletons;
+
+		for ( var i = 0; i < json.length; i ++ ) {
+
+			var skeletonParams = json[ i ];
+
+			var uuid = skeletonParams.uuid;
+			var boneParams = skeletonParams.bones;
+			var boneInverseParams = skeletonParams.boneInverses;
+
+			var bones = [];
+			var boneInverses = [];
+
+			for ( var j = 0, jl = boneParams.length; j < jl; j ++ ) {
+
+				var bone = object.getObjectByProperty( 'uuid', boneParams[ j ] );
+
+				if ( bone === undefined ) {
+
+					console.warn( 'THREE.ObjectLoader: Not found Bone whose uuid is ' + boneParams[ j ] );
+					bone = new Bone();
+
+				}
+
+				bones.push( bone );
+				boneInverses.push( new Matrix4().fromArray( boneInverseParams[ j ] ) );
+
+			}
+
+			skeletons[ uuid ] = new Skeleton( bones, boneInverses );
+
+		}
+
+		return skeletons;
+
+	},
+
 	parseObject: function ( data, geometries, materials ) {
 
 		var object;
@@ -799,7 +847,33 @@ Object.assign( ObjectLoader.prototype, {
 
 			case 'SkinnedMesh':
 
-				console.warn( 'THREE.ObjectLoader.parseObject() does not support SkinnedMesh yet.' );
+				var geometry = getGeometry( data.geometry );
+				var material = getMaterial( data.material );
+
+				var tmpBones;
+
+				// If data has skeleton, assumes bones are already in scene graph.
+				// Then temporarily undefines geometry.bones not to create bones
+				// in SkinnedMesh constructor.
+
+				if ( data.skeleton !== undefined && geometry.bones !== undefined ) {
+
+					tmpBones = geometry.bones;
+					geometry.bones = undefined;
+
+				}
+
+				object = new SkinnedMesh( geometry, material );
+
+				// rebinds with skeleton whose uuid is data.skeleton later.
+				if ( data.skeleton !== undefined ) object.skeletonUUID = data.skeleton;
+				if ( data.bindMode !== undefined ) object.bindMode = data.bindMode;
+				if ( data.bindMatrix !== undefined ) object.bindMatrix.fromArray( data.bindMatrix );
+				object.updateMatrixWorld( true );
+
+				if ( tmpBones !== undefined ) geometry.bones = tmpBones;
+
+				break;
 
 			case 'Mesh':
 
@@ -815,6 +889,12 @@ Object.assign( ObjectLoader.prototype, {
 					object = new Mesh( geometry, material );
 
 				}
+
+				break;
+
+			case 'Bone':
+
+				object = new Bone();
 
 				break;
 
@@ -937,6 +1017,34 @@ Object.assign( ObjectLoader.prototype, {
 		}
 
 		return object;
+
+	},
+
+	bindSkeletons: function ( object, skeletons ) {
+
+		if ( Object.keys( skeletons ).length === 0 ) return;
+
+		object.traverse( function ( obj ) {
+
+			if ( obj.isSkinnedMesh === true && obj.skeletonUUID !== undefined ) {
+
+				var skeleton = skeletons[ obj.skeletonUUID ];
+
+				if ( skeleton === undefined ) {
+
+					console.warn( 'THREE.ObjectLoader: Not found Skeleton whose uuid is ' + obj.skeletonUUID );
+
+				} else {
+
+					obj.bind( skeleton, obj.bindMatrix );
+
+				}
+
+				delete obj.skeletonUUID;
+
+			}
+
+		} );
 
 	}
 
