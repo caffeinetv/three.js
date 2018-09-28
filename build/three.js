@@ -8711,7 +8711,8 @@
 					materials: {},
 					textures: {},
 					images: {},
-					shapes: {}
+					shapes: {},
+					skeletons: {}
 				};
 
 				output.metadata = {
@@ -8741,6 +8742,11 @@
 			object.matrix = this.matrix.toArray();
 
 			if ( this.matrixAutoUpdate === false ) object.matrixAutoUpdate = false;
+
+			// SkinnedMesh specific
+
+			if ( this.bindMode !== undefined ) object.bindMode = this.bindMode;
+			if ( this.bindMatrix !== undefined ) object.bindMatrix = this.bindMatrix.toArray();
 
 			//
 
@@ -8808,6 +8814,20 @@
 
 			}
 
+			// SkinnedMesh specific
+
+			if ( this.skeleton !== undefined ) {
+
+				if ( meta.skeletons[ this.skeleton.uuid ] === undefined ) {
+
+					meta.skeletons[ this.skeleton.uuid ] = this.skeleton.toJSON( meta );
+
+				}
+
+				object.skeleton = this.skeleton.uuid;
+
+			}
+
 			//
 
 			if ( this.children.length > 0 ) {
@@ -8829,12 +8849,14 @@
 				var textures = extractFromCache( meta.textures );
 				var images = extractFromCache( meta.images );
 				var shapes = extractFromCache( meta.shapes );
+				var skeletons = extractFromCache( meta.skeletons );
 
 				if ( geometries.length > 0 ) output.geometries = geometries;
 				if ( materials.length > 0 ) output.materials = materials;
 				if ( textures.length > 0 ) output.textures = textures;
 				if ( images.length > 0 ) output.images = images;
 				if ( shapes.length > 0 ) output.shapes = shapes;
+				if ( skeletons.length > 0 ) output.skeletons = skeletons;
 
 			}
 
@@ -25282,6 +25304,8 @@
 
 	function Skeleton( bones, boneInverses ) {
 
+		this.uuid = _Math.generateUUID();
+
 		// copy the bone array
 
 		bones = bones || [];
@@ -25442,6 +25466,33 @@
 			}
 
 			return undefined;
+
+		},
+
+		toJSON: function ( meta ) {
+
+			var data = {};
+
+			var bones = [];
+			var boneInverses = [];
+
+			for ( var i = 0, il = this.bones.length; i < il; i ++ ) {
+
+				bones.push( this.bones[ i ].uuid );
+
+			}
+
+			for ( var i = 0, il = this.boneInverses.length; i < il; i ++ ) {
+
+				boneInverses.push( this.boneInverses[ i ].toArray() );
+
+			}
+
+			data.uuid = this.uuid;
+			data.bones = bones;
+			data.boneInverses = boneInverses;
+
+			return data;
 
 		}
 
@@ -38097,6 +38148,10 @@
 
 			var object = this.parseObject( json.object, geometries, materials );
 
+			var skeletons = this.parseSkeletons( json.skeletons, object );
+
+			this.bindSkeletons( object, skeletons );
+
 			if ( json.animations ) {
 
 				object.animations = this.parseAnimations( json.animations );
@@ -38610,6 +38665,47 @@
 
 		},
 
+		parseSkeletons: function ( json, object ) {
+
+			var skeletons = {};
+
+			if ( json === undefined ) return skeletons;
+
+			for ( var i = 0; i < json.length; i ++ ) {
+
+				var skeletonParams = json[ i ];
+
+				var uuid = skeletonParams.uuid;
+				var boneParams = skeletonParams.bones;
+				var boneInverseParams = skeletonParams.boneInverses;
+
+				var bones = [];
+				var boneInverses = [];
+
+				for ( var j = 0, jl = boneParams.length; j < jl; j ++ ) {
+
+					var bone = object.getObjectByProperty( 'uuid', boneParams[ j ] );
+
+					if ( bone === undefined ) {
+
+						console.warn( 'THREE.ObjectLoader: Not found Bone whose uuid is ' + boneParams[ j ] );
+						bone = new Bone();
+
+					}
+
+					bones.push( bone );
+					boneInverses.push( new Matrix4().fromArray( boneInverseParams[ j ] ) );
+
+				}
+
+				skeletons[ uuid ] = new Skeleton( bones, boneInverses );
+
+			}
+
+			return skeletons;
+
+		},
+
 		parseObject: function ( data, geometries, materials ) {
 
 			var object;
@@ -38753,7 +38849,33 @@
 
 				case 'SkinnedMesh':
 
-					console.warn( 'THREE.ObjectLoader.parseObject() does not support SkinnedMesh yet.' );
+					var geometry = getGeometry( data.geometry );
+					var material = getMaterial( data.material );
+
+					var tmpBones;
+
+					// If data has skeleton, assumes bones are already in scene graph.
+					// Then temporarily undefines geometry.bones not to create bones
+					// in SkinnedMesh constructor.
+
+					if ( data.skeleton !== undefined && geometry.bones !== undefined ) {
+
+						tmpBones = geometry.bones;
+						geometry.bones = undefined;
+
+					}
+
+					object = new SkinnedMesh( geometry, material );
+
+					// rebinds with skeleton whose uuid is data.skeleton later.
+					if ( data.skeleton !== undefined ) object.skeletonUUID = data.skeleton;
+					if ( data.bindMode !== undefined ) object.bindMode = data.bindMode;
+					if ( data.bindMatrix !== undefined ) object.bindMatrix.fromArray( data.bindMatrix );
+					object.updateMatrixWorld( true );
+
+					if ( tmpBones !== undefined ) geometry.bones = tmpBones;
+
+					break;
 
 				case 'Mesh':
 
@@ -38769,6 +38891,12 @@
 						object = new Mesh( geometry, material );
 
 					}
+
+					break;
+
+				case 'Bone':
+
+					object = new Bone();
 
 					break;
 
@@ -38891,6 +39019,34 @@
 			}
 
 			return object;
+
+		},
+
+		bindSkeletons: function ( object, skeletons ) {
+
+			if ( Object.keys( skeletons ).length === 0 ) return;
+
+			object.traverse( function ( obj ) {
+
+				if ( obj.isSkinnedMesh === true && obj.skeletonUUID !== undefined ) {
+
+					var skeleton = skeletons[ obj.skeletonUUID ];
+
+					if ( skeleton === undefined ) {
+
+						console.warn( 'THREE.ObjectLoader: Not found Skeleton whose uuid is ' + obj.skeletonUUID );
+
+					} else {
+
+						obj.bind( skeleton, obj.bindMatrix );
+
+					}
+
+					delete obj.skeletonUUID;
+
+				}
+
+			} );
 
 		}
 
